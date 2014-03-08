@@ -20,11 +20,19 @@ atmospheric pressure.
 
  #tail -f /var/log/syslog
 
-7. PiWeatherStation accepts two signals SIGTERM and SIGINT to exit form the running state. To stop the daemon use:
+7. PiWeatherStation accepts 3 signals: SIGTERM, SIGINT to exit from the running state and SIGHUP to reload the configuration file if it was updated
+while the daemon is still in the running state. There is no need to restart the daemon in order to start a new measurement with different settings then 
+the ongoing one. 
+
+Foe example, to stop the daemon use:
 
  #kill -SIGTERM <PiWeatherStation PID>
 
-The PID is written int the daemon.lock file in the PiWeatherStation working folder.
+or to reload the configuration file:
+
+ #kill -SIGHUP <PiWeatherStation PID>
+
+where the  PID number can be faound in the daemon.lock file located in the PiWeatherStation working folder.
 
 
 

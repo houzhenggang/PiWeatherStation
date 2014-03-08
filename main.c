@@ -27,11 +27,23 @@
 
 #define SIGTIMER 35
 
+//Exit switch 
 static volatile sig_atomic_t loopFlag = 1;
+//Timer has expired switch 
 static volatile sig_atomic_t timerExpired = 0;
+//Controls the config reload 
+static volatile sig_atomic_t reloadConfig = 0;
 
+//Function that handles the signals
 void SIG_handler(int);
-void terminate(dbobjects *,configuration *,char *);
+//Close database connection, free the memory resources
+void terminate(dbobjects *,configuration *,BMP085 *,char *);
+//Read the daemon configuration file, prepare the database and define sensor parameters
+int init(dbobjects *,configuration *,BMP085 **,int *,char *);
+//Start timer for 60s
+void startTimer(timer_t *,struct itimerspec *);
+//Stop the timer
+void stopTimer(timer_t *,struct itimerspec *);
 
 int main(int argc, char **argv)
 {
@@ -46,18 +58,19 @@ int main(int argc, char **argv)
 	//Create child
     	pid=fork();
 
-    	if(pid<0)
-    		exit(EXIT_FAILURE);
-    	if(pid>0)
-    		exit(EXIT_SUCCESS);
+   	if(pid<0)
+   		exit(EXIT_FAILURE);
+   	if(pid>0)
+   		exit(EXIT_SUCCESS);
 
-    	umask(0);
-   	 sid=setsid();
-    	if (sid<0)
-    		exit(EXIT_FAILURE);
-    	if ((chdir(".")) < 0)
-    		exit(EXIT_FAILURE);
-    	close(STDIN_FILENO);
+   	umask(0);
+   	sid=setsid();
+   	if (sid<0)
+   		exit(EXIT_FAILURE);
+   	if ((chdir(".")) < 0)
+   		exit(EXIT_FAILURE);
+	
+	close(STDIN_FILENO);
     	close(STDOUT_FILENO);
     	close(STDERR_FILENO);
 
@@ -67,12 +80,12 @@ int main(int argc, char **argv)
     	if (lockFileDes<0)
    	{
     		syslog(LOG_INFO,"Cannot create a lock file.");
-        	exit(1);
+       		exit(1);
     	}
     	if(lockf(lockFileDes,F_TLOCK,0)<0)
     	{
-      		syslog(LOG_INFO,"There is an instance of the daemon already running. Exiting.");
-      		exit(1);
+    		syslog(LOG_INFO,"There is an instance of the daemon already running. Exiting.");
+    		exit(1);
     	}
     	syslog(LOG_INFO,"Lock file created.");
     	sprintf(buffer,"%d\n",getpid());
@@ -80,12 +93,13 @@ int main(int argc, char **argv)
     	{
     		syslog(LOG_INFO,"Cannot write to the lock file.");
     		exit(1);
-	 }
+	}
 
 	//Timer related variables
 	timer_t timerid;
 	struct sigevent sevent;
 	struct itimerspec its;
+	struct itimerspec itsNULL;
 	configuration conf;
 
 	//Signal definition and handling
@@ -93,47 +107,31 @@ int main(int argc, char **argv)
 	//sigset_t signalMask;
 
 	//Define SQLite3 object
-	dbobjects dbo;
+	dbobjects dbo;	
+	dbo.db=NULL;
 
 	char errorMessage[255];
 
-        BMP085 *sensor;
-        int sfd;
+	BMP085 *sensor;
+    	int sfd;
 
-	//Read configuration file
-	if (readConfiguration("./conf/weatherStation.cfg",&conf,errorMessage)<0)
+	syslog(LOG_INFO,"Starting the init process.");
+	if (init(&dbo,&conf,&sensor,&sfd,errorMessage))
 	{
-		syslog(LOG_INFO,"Failed to fetch configuration.");
-		syslog(LOG_INFO,"%s",errorMessage);
+		syslog(LOG_INFO,"Faild to finish the initialisation process. Execution terminated.");
+		terminate(&dbo,&conf,sensor,errorMessage);
 		exit(1);
-	}
-
-	sensor = (BMP085 *) malloc(sizeof(BMP085));
-	sensor->oss=conf.sensorMode;
-	syslog(LOG_INFO,"Raspberry Pi i2c device interface: %s",conf.i2cBus);
-        syslog(LOG_INFO,"Sensor address: 0x%02X",conf.sensorAddress);
-        sensor->i2cAddress=(char)conf.sensorAddress;
-
-
-	if (connect2BMP085(&sfd,conf.i2cBus,sensor->i2cAddress))
-	{
-		syslog(LOG_INFO,"Failed to connect to the sensor.");
-		free(sensor);
-		exit(1);
-	}
-	syslog(LOG_INFO,"Reading BMP085 calibration table.");
-        readCalibrationTable(sfd,sensor);
-
+	}	
 	timerExpired=conf.interval;
 
 	//Define signal handling
 	signalAction.sa_flags=0;
 	signalAction.sa_handler=SIG_handler; //timerExpired;
 	sigemptyset(&(signalAction.sa_mask));
-	//sigaction(SIGRTMIN,&signalAction,NULL);
 	sigaction(SIGTIMER,&signalAction,NULL);
 	sigaction(SIGINT,&signalAction,NULL);
 	sigaction(SIGTERM,&signalAction,NULL);
+	sigaction(SIGHUP,&signalAction,NULL);
 
 	//Create new timer
 	sevent.sigev_notify=SIGEV_SIGNAL;
@@ -147,31 +145,15 @@ int main(int argc, char **argv)
 	its.it_value.tv_sec=60;
 	its.it_value.tv_nsec=0;
 
-	if (openDatabase(conf.db,&dbo,errorMessage))
-	{
-		syslog(LOG_INFO,"%s",errorMessage);
-		terminate(&dbo,&conf,errorMessage);
-		exit(1);
-	}
-
-	if (prepareSQLCommands(&dbo,errorMessage))
-	{
-		syslog(LOG_INFO,"%s",errorMessage);
-		terminate(&dbo,&conf,errorMessage);
-		exit(1);
-	}
-
-	if (createNewMeasurement(&dbo,conf.location,conf.interval,errorMessage))
-	{
-		syslog(LOG_INFO,"%s",errorMessage);
-		terminate(&dbo,&conf,errorMessage);
-		exit(1);
-	}
-
-	syslog(LOG_INFO,"Current measurement id: %d\n",(int)dbo.currentMeasurementID);
+	//Set structure to stop the timer
+	itsNULL.it_interval.tv_sec=0;
+        itsNULL.it_interval.tv_nsec=0;
+        itsNULL.it_value.tv_sec=0;
+        itsNULL.it_value.tv_nsec=0;
 
 	//Activate the timer
-	timer_settime(timerid,0,&its,NULL);
+	//timer_settime(timerid,0,&its,NULL);
+	startTimer(&timerid,&its);
 
 	while(loopFlag)
 	{
@@ -186,12 +168,27 @@ int main(int argc, char **argv)
 				break;
 			}
 		}
+		if(reloadConfig==1)
+		{
+			reloadConfig=0;
+			syslog(LOG_INFO,"SIGHUP signal received. Reload configuration file.");
+			stopTimer(&timerid,&itsNULL);
+			terminate(&dbo,&conf,sensor,errorMessage);
+		        if (init(&dbo,&conf,&sensor,&sfd,errorMessage))
+		        {
+                		syslog(LOG_INFO,"Faild to finish the initialisation process. Execution terminated.");
+                		terminate(&dbo,&conf,sensor,errorMessage);
+                		exit(1);
+		        }
+			timerExpired=conf.interval;
+			startTimer(&timerid,&its);
+		}	
 		sleep(60);
 	}
 
 	syslog(LOG_INFO,"Exiting...\n");
-	terminate(&dbo,&conf,errorMessage);
-	free (sensor);
+	stopTimer(&timerid,&itsNULL);
+	terminate(&dbo,&conf,sensor,errorMessage);
 
 	return (0);
 }
@@ -204,6 +201,9 @@ void SIG_handler(int sig)
 		case SIGTERM:
 			loopFlag = 0;
 			break;
+		case SIGHUP:
+			reloadConfig = 1;
+			break;
 		case SIGTIMER:
 			timerExpired--;
 			break;
@@ -211,13 +211,83 @@ void SIG_handler(int sig)
 	return;
 }
 
-void terminate(dbobjects *dbo,configuration *conf,char *errorMessage)
+void terminate(dbobjects *dbo,configuration *conf,BMP085 *sensor,char *errorMessage)
 {
 
-	if (closeDatabaseConnection(dbo,errorMessage))
+	if (dbo->db)
 	{
-		syslog(LOG_INFO,"%s",errorMessage);
+		if (closeDatabaseConnection(dbo,errorMessage))
+		{
+			syslog(LOG_INFO,"%s",errorMessage);
+		}
 	}
 	free(conf->db);
 	free(conf->location);
+	free(sensor);
 }
+
+int init(dbobjects *dbo,configuration *conf,BMP085 **sensor,int *sfd,char *errorMessage)
+{
+	//Read configuration file
+	if (readConfiguration("./conf/weatherStation.cfg",conf,errorMessage)<0)
+	{
+		syslog(LOG_INFO,"Failed to fetch configuration.");
+		syslog(LOG_INFO,"%s",errorMessage);
+		return 1;
+	}	
+
+	*sensor = (BMP085 *) malloc(sizeof(BMP085));
+    	//Update sensor connection parameters
+    	(*sensor)->oss=conf->sensorMode;
+    	syslog(LOG_INFO,"Raspberry Pi i2c device interface: %s",conf->i2cBus);
+    	syslog(LOG_INFO,"Sensor address: 0x%02X",conf->sensorAddress);
+    	(*sensor)->i2cAddress=(char)conf->sensorAddress;
+
+	//Connect to the sensor
+	if (connect2BMP085(sfd,conf->i2cBus,(*sensor)->i2cAddress))
+	{
+		syslog(LOG_INFO,"Failed to connect to the sensor.");
+		return 1;
+	}
+	//Read calibration table of the sensor
+	syslog(LOG_INFO,"Reading BMP085 calibration table.");
+	if (readCalibrationTable(*sfd,*sensor)==0)
+		return 1;
+	
+	//Define a new measurement in the database
+    	if (openDatabase(conf->db,dbo,errorMessage))
+	{
+		syslog(LOG_INFO,"%s",errorMessage);
+		return 1;
+	}
+
+	if (prepareSQLCommands(dbo,errorMessage))
+	{
+		syslog(LOG_INFO,"%s",errorMessage);
+		return 1;
+	}
+
+	if (createNewMeasurement(dbo,conf->location,conf->interval,errorMessage))
+	{
+		syslog(LOG_INFO,"%s",errorMessage);
+		return 1;
+	}
+
+	syslog(LOG_INFO,"Current measurement id: %d\n",(int)dbo->currentMeasurementID);
+	
+	return 0;
+}
+
+void startTimer(timer_t *timerid,struct itimerspec *its)
+{
+	timer_settime(*timerid,0,its,NULL);
+	return;
+}
+
+void stopTimer(timer_t *timerid,struct itimerspec *itsNULL)
+{
+	timer_settime(*timerid,0,itsNULL,NULL);
+	return;
+}
+
+
