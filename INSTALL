@@ -2,7 +2,7 @@ Dependences
 
 PiWeaterStation records the readings from BMP085 sensor in SQlite3 database.                                        
 It depends on the following libraries:
-- libBMP085 library  for communication with the BMP085 sensor from user space;     
+- libBMP085 library (https://github.com/positronic57/libBMP085) for communication with the BMP085 sensor from user space;     
 - libconfig (http://www.hyperrealm.com/libconfig/) is used for parsing the PiWeatherStation configuration file. For the syntax
   and formating of the configuration file, check the libconfig web site;
 - librt to implement the sampling interval timer;
