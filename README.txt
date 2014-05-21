@@ -1,8 +1,8 @@
 PiWeatherStation
 
-PiWeatherStation is Linux daemon written in C for Raspberry Pi that use Bosch BMP085 I2C sensor module from Adafruit (product ID 391) 
-to record the barometric pressure and temperature in a database on a regular sampling intervals. The log messages generate by the daemon 
-are written in /var/log/syslog by syslogd integration.
+PiWeatherStation is a Linux daemon written in C for Raspberry Pi that uses Bosch BMP085 I2C sensor module from Adafruit (product ID 391) 
+to record the barometric pressure and temperature in SQLite3 database on a regular sampling intervals. The log messages generate by the daemon 
+are written in /var/log/syslog by syslogd integration. 
 
 Usage
 

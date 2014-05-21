@@ -1,0 +1,10 @@
+# Lock file created while testing daemon 
+daemon.lock
+
+# PiWeatherStation executable
+PiWeatherStation
+
+# Remove the source code related to BMP085. They are obsolete after implementation of libBMP085 library.
+bmp085.h
+bmp085.c
+

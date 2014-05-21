@@ -23,7 +23,7 @@
 #include <string.h>
 #include "db.h"
 #include "configurator.h"
-#include "bmp085.h"
+#include "libbmp085.h"
 
 #define SIGTIMER 35
 
@@ -161,7 +161,7 @@ int main(int argc, char **argv)
 		{
 			timerExpired=conf.interval;
 			syslog(LOG_INFO,"%dmin timer expired.",conf.interval);
-			makeMeasurement(sfd,sensor);
+			BMP085takeMeasurement(sfd,sensor);
 			if(writeMeasuredValue(&dbo,sensor->pressure/100.0,sensor->temperature,errorMessage))
 			{
 				syslog(LOG_INFO,"%s",errorMessage);
@@ -251,7 +251,7 @@ int init(dbobjects *dbo,configuration *conf,BMP085 **sensor,int *sfd,char *error
 	}
 	//Read calibration table of the sensor
 	syslog(LOG_INFO,"Reading BMP085 calibration table.");
-	if (readCalibrationTable(*sfd,*sensor)==0)
+	if (readBMP085CalibrationTable(*sfd,*sensor)==1)
 		return 1;
 	
 	//Define a new measurement in the database
